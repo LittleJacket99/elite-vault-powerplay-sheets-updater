@@ -16,6 +16,7 @@ import requests
 
 VAULT_URL = os.getenv("VAULT_URL", "https://vault.elitehub.eu/graphql")
 APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL", "")
+APPS_SCRIPT_TOKEN = os.getenv("APPS_SCRIPT_TOKEN", "")
 PROJECT_REPOSITORY_URL = os.getenv("PROJECT_REPOSITORY_URL", "")
 
 EXCP_FACTION_ID = os.getenv(
@@ -335,12 +336,19 @@ def match_systems(mahon_rows: list[list[Any]], excp_systems: list[str]) -> list[
 def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
     if not APPS_SCRIPT_URL:
         raise RuntimeError("APPS_SCRIPT_URL is required unless --dry-run is used")
+    if not APPS_SCRIPT_TOKEN:
+        raise RuntimeError("APPS_SCRIPT_TOKEN is required unless --dry-run is used")
     last_error: Exception | None = None
     for attempt in range(1, 4):
         try:
             response = requests.post(
                 APPS_SCRIPT_URL,
-                json={"action": "write", "sheet": sheet, "values": values},
+                json={
+                    "action": "write",
+                    "token": APPS_SCRIPT_TOKEN,
+                    "sheet": sheet,
+                    "values": values,
+                },
                 timeout=90,
             )
             response.raise_for_status()

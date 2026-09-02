@@ -21,6 +21,10 @@ This public repository is provided as a reference implementation and is not the
 production updater used by its maintainer. It contains no scheduled GitHub
 Actions workflow and does not run automatically.
 
+An inactive workflow example is available in
+[`examples/github-actions/update.yml`](examples/github-actions/update.yml).
+GitHub does not execute files from the `examples` directory.
+
 ## Data flow
 
 1. The script queries the read-only Vault GraphQL endpoint with pagination.
@@ -48,6 +52,7 @@ Set the required environment variable without committing it:
 
 ```bash
 export APPS_SCRIPT_URL="https://script.google.com/macros/s/.../exec"
+export APPS_SCRIPT_TOKEN="replace-with-a-long-random-secret"
 export PROJECT_REPOSITORY_URL="https://github.com/YOUR_USERNAME/elite-vault-sheets-updater"
 python updater.py
 ```
@@ -58,6 +63,23 @@ To test Vault queries and sanity checks without changing Sheets:
 python updater.py --dry-run
 ```
 
+## Google Apps Script setup
+
+A generic receiver is included in [`apps-script/Code.gs`](apps-script/Code.gs).
+It is an example only and is not connected to the maintainer's spreadsheet.
+
+To use it in your own Google account:
+
+1. Create an Apps Script project and paste the contents of `Code.gs`.
+2. In **Project Settings → Script Properties**, add:
+   - `SPREADSHEET_ID`: the ID of your destination spreadsheet;
+   - `API_TOKEN`: a long random secret of your choice.
+3. Deploy it as a web app and keep its deployment URL private.
+4. Use the same secret as `APPS_SCRIPT_TOKEN` when running the Python updater.
+
+The receiver accepts writes only to `Mahon`, `EXCP`, and `EXCP_Mahon`. Change
+`ALLOWED_SHEETS` in the example if you use different sheet names.
+
 ## Apps Script contract
 
 For each sheet, the updater sends an HTTP `POST` with JSON shaped like this:
@@ -65,6 +87,7 @@ For each sheet, the updater sends an HTTP `POST` with JSON shaped like this:
 ```json
 {
   "action": "write",
+  "token": "shared-secret",
   "sheet": "Mahon",
   "values": [["Star system", "State"], ["14 Herculis", "Exploited"]]
 }
@@ -81,6 +104,7 @@ The endpoint must return JSON containing:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `APPS_SCRIPT_URL` | required | Private Apps Script web-app endpoint |
+| `APPS_SCRIPT_TOKEN` | required | Secret shared with the Apps Script receiver |
 | `PROJECT_REPOSITORY_URL` | empty | Added to the Vault `User-Agent` |
 | `VAULT_URL` | Vault public endpoint | GraphQL endpoint |
 | `VAULT_BATCH_SIZE` | `100` | Initial pagination size |
@@ -93,6 +117,14 @@ The endpoint must return JSON containing:
 | `MAHON_SHEET` | `Mahon` | Destination sheet |
 | `EXCP_SHEET` | `EXCP` | Destination sheet |
 | `MATCH_SHEET` | `EXCP_Mahon` | Destination intersection sheet |
+
+## Optional GitHub Actions example
+
+The file [`examples/github-actions/update.yml`](examples/github-actions/update.yml)
+shows how a fork can run the updater manually or on a daily schedule. It is
+deliberately stored outside `.github/workflows`, so it is inert in this
+repository. Enabling it requires copying the file and configuring both
+`APPS_SCRIPT_URL` and `APPS_SCRIPT_TOKEN` as repository secrets.
 
 ## Attribution
 

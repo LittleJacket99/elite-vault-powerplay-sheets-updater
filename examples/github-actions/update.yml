@@ -1,0 +1,44 @@
+# INACTIVE EXAMPLE
+# GitHub does not execute this file from the examples/ directory.
+# To enable it in a fork, copy it to .github/workflows/update.yml and configure
+# the APPS_SCRIPT_URL and APPS_SCRIPT_TOKEN repository secrets.
+
+name: Update Elite Vault sheets
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron uses UTC. This is 20:00 in Italy during daylight-saving time.
+    - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: elite-vault-sheets-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run updater
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          PROJECT_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: python updater.py
