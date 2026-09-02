@@ -53,7 +53,7 @@ Set the required environment variable without committing it:
 ```bash
 export APPS_SCRIPT_URL="https://script.google.com/macros/s/.../exec"
 export APPS_SCRIPT_TOKEN="replace-with-a-long-random-secret"
-export PROJECT_REPOSITORY_URL="https://github.com/YOUR_USERNAME/elite-vault-sheets-updater"
+export PROJECT_REPOSITORY_URL="https://github.com/YOUR_USERNAME/elite-vault-powerplay-sheets-updater"
 python updater.py
 ```
 
