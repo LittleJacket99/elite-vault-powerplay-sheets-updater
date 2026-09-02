@@ -1,5 +1,5 @@
 /**
- * Example Google Apps Script receiver for Elite Vault Sheets Updater.
+ * Example Google Apps Script receiver for Elite Vault Powerplay Sheets Updater.
  *
  * Required Script Properties:
  *   SPREADSHEET_ID - destination Google Sheet ID
