@@ -153,7 +153,7 @@ def is_query_cost_error(exc: Exception) -> bool:
 
 
 def user_agent() -> str:
-    base = "Elite-Vault-Sheets-Updater/1.0"
+    base = "Elite-Vault-Powerplay-Sheets-Updater/1.0"
     return f"{base} (+{PROJECT_REPOSITORY_URL})" if PROJECT_REPOSITORY_URL else base
 
 
