@@ -1,4 +1,4 @@
-# Elite Vault Sheets Updater
+# Elite Vault Powerplay Sheets Updater
 
 [![Data source: EliteHub Vault](https://img.shields.io/badge/Data%20source-EliteHub%20Vault-5865f2)](https://github.com/jovanblazek/elitehub-vault)
 
