@@ -6,7 +6,7 @@
  *   API_TOKEN      - long random secret shared with APPS_SCRIPT_TOKEN
  */
 
-const ALLOWED_SHEETS = new Set(["Mahon", "EXCP", "EXCP_Mahon"]);
+const ALLOWED_SHEETS = new Set(["EXCP", "EXCP_Mahon"]);
 
 
 function jsonResponse_(body) {

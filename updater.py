@@ -1,601 +1,346 @@
-"""Synchronize EliteHub Vault data with Google Sheets via Apps Script."""
+"""Synchronize EXCP powerplay data from EliteHub Vault with Google Sheets."""
 
-import os
+from __future__ import annotations
+
+import argparse
+import json
 import math
+import os
 import time
 from datetime import datetime, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import requests
 
 
-# ============================================================
-# CONFIG
-# ============================================================
+VAULT_URL = os.getenv("VAULT_URL", "https://vault.elitehub.eu/graphql")
+APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL", "")
+APPS_SCRIPT_TOKEN = os.getenv("APPS_SCRIPT_TOKEN", "")
+PROJECT_REPOSITORY_URL = os.getenv("PROJECT_REPOSITORY_URL", "")
 
-VAULT_URL = "https://vault.elitehub.eu/graphql"
+EXCP_FACTION_ID = os.getenv(
+    "EXCP_FACTION_ID", "35b7ec6b-9465-4c62-bc5b-110ee790967a"
+)
+MAHON_POWER_ID = os.getenv(
+    "MAHON_POWER_ID", "ce1142ad-61e6-4115-b458-b1ddeadada81"
+)
+MAHON_POWER_NAME = os.getenv("MAHON_POWER_NAME", "Edmund Mahon")
 
-APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL")
+BATCH_SIZE = int(os.getenv("VAULT_BATCH_SIZE", "50"))
+MIN_BATCH_SIZE = int(os.getenv("VAULT_MIN_BATCH_SIZE", "10"))
+MAX_RETRIES = int(os.getenv("VAULT_MAX_RETRIES", "5"))
+REQUEST_DELAY = float(os.getenv("VAULT_REQUEST_DELAY", "1.5"))
+VAULT_TIMEOUT = float(os.getenv("VAULT_TIMEOUT", "60"))
+MIN_EXCP_SYSTEMS = int(os.getenv("MIN_EXCP_SYSTEMS", "150"))
+MIN_MATCH_SYSTEMS = int(os.getenv("MIN_MATCH_SYSTEMS", "1"))
 
-if not APPS_SCRIPT_URL:
-    raise RuntimeError(
-        "Missing APPS_SCRIPT_URL environment variable"
-    )
+EXCP_SHEET = os.getenv("EXCP_SHEET", "EXCP")
+MATCH_SHEET = os.getenv("MATCH_SHEET", "EXCP_Mahon")
 
-# Expanders Corp
-EXCP_FACTION_ID = "35b7ec6b-9465-4c62-bc5b-110ee790967a"
-
-# Edmund Mahon
-MAHON_POWER_ID = "ce1142ad-61e6-4115-b458-b1ddeadada81"
-MAHON_POWER_NAME = "Edmund Mahon"
-
-
-# ============================================================
-# VAULT SETTINGS
-# ============================================================
-
-VAULT_BATCH_SIZE = 50
-VAULT_MIN_BATCH_SIZE = 10
-
-# Con sole ~5 richieste non serve essere aggressivi.
-VAULT_REQUEST_DELAY = 1.5
-
-VAULT_TIMEOUT = 60
-VAULT_MAX_RETRIES = 5
-
-
-# ============================================================
-# FORMATTING
-# ============================================================
-
-def format_number(value):
-    if value is None:
-        return ""
-
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-
-    return value
-
-
-def format_progress(value):
-    """
-    Vault restituisce progress come valore 0..1.
-    Esempio:
-        0.587608 -> 58.7608%
-    """
-    if value is None:
-        return ""
-
-    percentage = value * 100
-
-    # Mantiene una precisione utile senza zeri inutili.
-    text = f"{percentage:.4f}".rstrip("0").rstrip(".")
-
-    return f"{text}%"
-
-
-def parse_vault_datetime(value):
-    if not value:
-        return None
-
-    try:
-        # Vault attualmente restituisce timestamp senza Z:
-        # 2026-09-08T22:40:57.785000
-        dt = datetime.fromisoformat(value)
-
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-
-        return dt.astimezone(timezone.utc)
-
-    except Exception:
-        return None
-
-
-def format_relative_time(value):
-    dt = parse_vault_datetime(value)
-
-    if dt is None:
-        return ""
-
-    now = datetime.now(timezone.utc)
-    seconds = max(0, int((now - dt).total_seconds()))
-
-    if seconds < 60:
-        return "just now"
-
-    minutes = seconds // 60
-
-    if minutes < 60:
-        return f"{minutes} min ago"
-
-    hours = minutes // 60
-
-    if hours < 24:
-        return f"{hours} hours ago"
-
-    days = hours // 24
-
-    if days < 30:
-        return f"{days} days ago"
-
-    months = days // 30
-
-    if months < 12:
-        return f"{months} months ago"
-
-    years = days // 365
-    return f"{years} years ago"
-
-
-def rome_now():
-    return datetime.now(
-        ZoneInfo("Europe/Rome")
-    ).strftime("%d/%m/%Y %H:%M")
-
-
-# ============================================================
-# APPS SCRIPT
-# ============================================================
-
-def post_apps_script(sheet_name, values):
-    payload = {
-        "action": "write",
-        "sheet": sheet_name,
-        "values": values,
-    }
-
-    last_error = None
-
-    for attempt in range(1, 4):
-        try:
-            print(
-                f"[Sheets] Scrittura {sheet_name} "
-                f"({len(values) - 1} righe)..."
-            )
-
-            response = requests.post(
-                APPS_SCRIPT_URL,
-                json=payload,
-                timeout=60,
-            )
-
-            response.raise_for_status()
-
-            print(
-                f"[Sheets] {sheet_name} aggiornato con successo."
-            )
-
-            return
-
-        except Exception as exc:
-            last_error = exc
-
-            print(
-                f"[Sheets] Errore tentativo {attempt}/3 "
-                f"su {sheet_name}: {exc}"
-            )
-
-            if attempt < 3:
-                time.sleep(5 * attempt)
-
-    raise RuntimeError(
-        f"Impossibile aggiornare {sheet_name}: {last_error}"
-    )
-
-
-# ============================================================
-# VAULT GRAPHQL
-# ============================================================
 
 EXCP_POWERPLAY_QUERY = """
 query ExcpPowerplay(
-    $first: Int!,
-    $offset: Int!,
-    $factionId: UUID!,
-    $powerId: UUID!
+  $first: Int!
+  $offset: Int!
+  $factionId: UUID!
+  $powerId: UUID!
 ) {
-    systems(
-        first: $first
-        offset: $offset
-        condition: {
-            controllingFactionId: $factionId
-        }
-    ) {
+  systems(
+    first: $first
+    offset: $offset
+    condition: { controllingFactionId: $factionId }
+  ) {
+    totalCount
+    nodes {
+      name
+      powerplayState
+      powerplayStateControlProgress
+      powerplayStateReinforcement
+      powerplayStateUndermining
+      updatedAt
+      systemPowerplayPowers(condition: { powerId: $powerId }) {
         totalCount
-
+      }
+      powerplayConflicts {
+        totalCount
         nodes {
-            name
-
-            powerplayState
-            powerplayStateControlProgress
-            powerplayStateReinforcement
-            powerplayStateUndermining
-            updatedAt
-
-            systemPowerplayPowers(
-                condition: {
-                    powerId: $powerId
-                }
-            ) {
-                totalCount
-            }
-
-            powerplayConflicts {
-                totalCount
-
-                nodes {
-                    conflictProgress
-                    updatedAt
-
-                    power {
-                        name
-                    }
-                }
-            }
+          conflictProgress
+          updatedAt
+          power { name }
         }
+      }
     }
+  }
 }
 """
 
 
-def is_query_cost_error(data):
-    errors = data.get("errors") or []
-
-    for error in errors:
-        message = str(error.get("message", "")).lower()
-
-        if (
-            "query cost" in message
-            and "limit" in message
-        ):
-            return True
-
-    return False
+class VaultQueryCostError(RuntimeError):
+    """Raised when Vault rejects a GraphQL query because it is too expensive."""
 
 
-def vault_request(query, variables):
-    last_error = None
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).replace("︎", "").replace("", "").split()).strip()
 
-    for attempt in range(1, VAULT_MAX_RETRIES + 1):
+
+def format_number(value: Any) -> Any:
+    if value is None or value == "":
+        return ""
+    try:
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return ""
+        return int(number) if number.is_integer() else number
+    except (TypeError, ValueError):
+        return value
+
+
+def format_progress(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        text = f"{float(value) * 100:.4f}".rstrip("0").rstrip(".")
+        return f"{text}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+def parse_vault_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_relative_time(value: Any) -> str:
+    parsed = parse_vault_datetime(value)
+    if parsed is None:
+        return ""
+
+    seconds = max(0, int((datetime.now(timezone.utc) - parsed).total_seconds()))
+    units = (
+        (365 * 86400, "year"),
+        (30 * 86400, "month"),
+        (7 * 86400, "week"),
+        (86400, "day"),
+        (3600, "hour"),
+        (60, "min"),
+    )
+    if seconds < 60:
+        return "just now"
+    for divisor, label in units:
+        if seconds >= divisor:
+            count = seconds // divisor
+            suffix = "" if count == 1 or label == "min" else "s"
+            return f"{count} {label}{suffix} ago"
+    return "just now"
+
+
+def now_rome_string() -> str:
+    return datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m/%Y %H:%M")
+
+
+def user_agent() -> str:
+    base = "Elite-Vault-Powerplay-Sheets-Updater/2.0"
+    return f"{base} (+{PROJECT_REPOSITORY_URL})" if PROJECT_REPOSITORY_URL else base
+
+
+def is_query_cost_message(message: str) -> bool:
+    lowered = message.lower()
+    return "query cost" in lowered or "cost limit" in lowered
+
+
+def vault_post(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    last_error: Exception | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = requests.post(
                 VAULT_URL,
-                json={
-                    "query": query,
-                    "variables": variables,
+                json={"query": query, "variables": variables},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": user_agent(),
                 },
                 timeout=VAULT_TIMEOUT,
             )
 
-            # Rate limit
             if response.status_code == 429:
-                retry_after = response.headers.get(
-                    "Retry-After",
-                    "5",
-                )
-
                 try:
-                    wait = max(1, int(float(retry_after)))
-                except Exception:
-                    wait = 5
-
-                print(
-                    f"[Vault] Rate limit. "
-                    f"Retry-After: {wait}s"
-                )
-
+                    wait = max(1.0, float(response.headers.get("Retry-After", "")))
+                except ValueError:
+                    wait = 5.0 * attempt
+                print(f"[Vault] Rate limit; retry in {wait:.1f}s")
                 time.sleep(wait)
                 continue
 
             response.raise_for_status()
-
-            data = response.json()
-
-            if data.get("errors"):
-                messages = "; ".join(
-                    str(error.get("message"))
-                    for error in data["errors"]
-                )
-
-                raise RuntimeError(
-                    f"GraphQL error: {messages}"
-                )
-
-            return data["data"]
-
+            result = response.json()
+            errors = result.get("errors") or []
+            if errors:
+                message = "; ".join(str(error.get("message", error)) for error in errors)
+                if is_query_cost_message(message):
+                    raise VaultQueryCostError(message)
+                raise RuntimeError(f"GraphQL errors: {message}")
+            if result.get("data") is None:
+                raise RuntimeError("Vault response does not contain data")
+            return result["data"]
+        except VaultQueryCostError:
+            raise
         except Exception as exc:
             last_error = exc
-
-            print(
-                f"[Vault] Errore tentativo "
-                f"{attempt}/{VAULT_MAX_RETRIES}: {exc}"
-            )
-
-            if attempt < VAULT_MAX_RETRIES:
+            print(f"[Vault] Attempt {attempt}/{MAX_RETRIES} failed: {exc}")
+            if attempt < MAX_RETRIES:
                 time.sleep(3 * attempt)
 
-    raise RuntimeError(
-        f"Vault non disponibile: {last_error}"
-    )
+    raise RuntimeError("EliteHub Vault is unavailable") from last_error
 
 
-# ============================================================
-# EXCP + POWERPLAY
-# ============================================================
-
-def fetch_excp_powerplay():
-    """
-    Recupera SOLO i sistemi controllati da Expanders Corp,
-    insieme ai dati Powerplay necessari per stabilire
-    quali appartengono/interessano a Edmund Mahon.
-
-    Nessuna scansione globale dei sistemi Mahon.
-    """
-
-    systems = []
+def fetch_excp_powerplay() -> list[dict[str, Any]]:
+    """Fetch only EXCP-controlled systems and their Mahon powerplay relations."""
 
     offset = 0
-    batch_size = VAULT_BATCH_SIZE
-    total_count = None
+    batch_size = BATCH_SIZE
+    total_count: int | None = None
+    systems: list[dict[str, Any]] = []
 
-    print()
-    print("========================================")
-    print(" VAULT: EXCP + POWERPLAY")
-    print("========================================")
-
+    print("\n[Vault] Fetching EXCP controlled systems with powerplay data")
     while total_count is None or offset < total_count:
-
         variables = {
             "first": batch_size,
             "offset": offset,
             "factionId": EXCP_FACTION_ID,
             "powerId": MAHON_POWER_ID,
         }
-
         try:
-            data = vault_request(
-                EXCP_POWERPLAY_QUERY,
-                variables,
+            data = vault_post(EXCP_POWERPLAY_QUERY, variables)
+        except VaultQueryCostError:
+            if batch_size <= MIN_BATCH_SIZE:
+                raise
+            new_batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
+            print(
+                f"[Vault] Query cost too high; batch {batch_size} -> {new_batch_size}"
             )
+            batch_size = new_batch_size
+            continue
 
-        except RuntimeError as exc:
-
-            # Se il costo della query dovesse cambiare
-            # in futuro, riduciamo automaticamente il batch.
-            if (
-                "query cost" in str(exc).lower()
-                and batch_size > VAULT_MIN_BATCH_SIZE
-            ):
-                new_batch = max(
-                    VAULT_MIN_BATCH_SIZE,
-                    batch_size // 2,
-                )
-
-                print(
-                    f"[Vault] Query troppo costosa. "
-                    f"Batch {batch_size} -> {new_batch}"
-                )
-
-                batch_size = new_batch
-                continue
-
-            raise
-
-        result = data["systems"]
+        connection = data.get("systems")
+        if not isinstance(connection, dict):
+            raise RuntimeError("Vault response is missing the systems connection")
 
         if total_count is None:
-            total_count = result["totalCount"]
+            total_count = int(connection.get("totalCount") or 0)
+            print(f"[Vault] Expected EXCP systems: {total_count}")
 
-            print(
-                f"[Vault] Sistemi EXCP controllati: "
-                f"{total_count}"
-            )
-
-        nodes = result.get("nodes") or []
-
-        systems.extend(nodes)
-
-        offset += len(nodes)
-
-        print(
-            f"[Vault] {min(offset, total_count)}/"
-            f"{total_count} sistemi"
-            f" | Batch: {batch_size}"
-        )
-
+        nodes = connection.get("nodes") or []
         if not nodes:
+            if offset < total_count:
+                raise RuntimeError(f"Empty Vault page before completion: {offset}/{total_count}")
             break
 
+        systems.extend(node for node in nodes if isinstance(node, dict))
+        offset += len(nodes)
+        print(f"[Vault] {min(offset, total_count)}/{total_count} | batch {batch_size}")
         if offset < total_count:
-            time.sleep(VAULT_REQUEST_DELAY)
+            time.sleep(REQUEST_DELAY)
 
-    print(
-        f"[Vault] Recuperati {len(systems)} "
-        f"sistemi EXCP."
-    )
+    unique: dict[str, dict[str, Any]] = {}
+    for system in systems:
+        name = clean_text(system.get("name"))
+        if name:
+            system["name"] = name
+            unique[name.lower()] = system
 
-    return systems
+    result = sorted(unique.values(), key=lambda item: item["name"].lower())
+    if len(result) < MIN_EXCP_SYSTEMS:
+        raise RuntimeError(f"Suspicious EXCP dataset: only {len(result)} systems")
+    return result
 
 
-# ============================================================
-# POWERPLAY CLASSIFICATION
-# ============================================================
-
-def find_mahon_conflict(system):
-    conflicts = (
-        system.get("powerplayConflicts", {})
-        .get("nodes", [])
-    )
-
+def find_mahon_conflict(system: dict[str, Any]) -> dict[str, Any] | None:
+    conflicts = (system.get("powerplayConflicts") or {}).get("nodes") or []
     for conflict in conflicts:
-        power = conflict.get("power") or {}
-
+        power = (conflict or {}).get("power") or {}
         if power.get("name") == MAHON_POWER_NAME:
             return conflict
-
     return None
 
 
-def build_mahon_row(system):
-    """
-    Restituisce una riga EXCP_Mahon oppure None
-    se il sistema non è associato a Mahon.
-    """
+def build_mahon_row(system: dict[str, Any]) -> list[Any] | None:
+    """Build an EXCP_Mahon row, or return None when Mahon is unrelated."""
 
-    relation = (
-        system.get("systemPowerplayPowers") or {}
-    )
-
-    mahon_relation_count = (
-        relation.get("totalCount") or 0
-    )
-
-    if mahon_relation_count == 0:
+    relation = system.get("systemPowerplayPowers") or {}
+    if int(relation.get("totalCount") or 0) == 0:
         return None
 
-    name = system.get("name", "")
+    name = clean_text(system.get("name"))
     state = system.get("powerplayState")
+    if not name:
+        return None
 
-    # --------------------------------------------------------
-    # OCCUPIED
-    # --------------------------------------------------------
-
-    if state in (
-        "Exploited",
-        "Fortified",
-        "Stronghold",
-    ):
+    if state in {"Exploited", "Fortified", "Stronghold"}:
         return [
             name,
             state,
-            format_number(
-                system.get(
-                    "powerplayStateUndermining"
-                )
-            ),
-            format_number(
-                system.get(
-                    "powerplayStateReinforcement"
-                )
-            ),
-            format_progress(
-                system.get(
-                    "powerplayStateControlProgress"
-                )
-            ),
-            format_relative_time(
-                system.get("updatedAt")
-            ),
+            format_number(system.get("powerplayStateUndermining")),
+            format_number(system.get("powerplayStateReinforcement")),
+            format_progress(system.get("powerplayStateControlProgress")),
+            format_relative_time(system.get("updatedAt")),
         ]
-
-    # --------------------------------------------------------
-    # UNOCCUPIED
-    # --------------------------------------------------------
 
     if state == "Unoccupied":
-
         conflict = find_mahon_conflict(system)
-
-        # Relazione Mahon presente ma nessun conflict Mahon:
-        # situazione anomala/incompleta.
         if conflict is None:
-            print(
-                f"[WARN] {name}: relazione Mahon presente "
-                f"ma conflict Mahon assente."
-            )
-
+            print(f"[Warning] {name}: Mahon relation present but conflict missing")
             return None
-
-        conflicts_info = (
-            system.get("powerplayConflicts") or {}
+        total_conflicts = int(
+            (system.get("powerplayConflicts") or {}).get("totalCount") or 0
         )
-
-        total_conflicts = (
-            conflicts_info.get("totalCount") or 0
-        )
-
-        if total_conflicts == 1:
-            output_state = "Expansion"
-        else:
-            output_state = "Contested"
-
         return [
             name,
-            output_state,
+            "Expansion" if total_conflicts == 1 else "Contested",
             "",
             "",
-            format_progress(
-                conflict.get("conflictProgress")
-            ),
-            format_relative_time(
-                conflict.get("updatedAt")
-                or system.get("updatedAt")
-            ),
+            format_progress(conflict.get("conflictProgress")),
+            format_relative_time(conflict.get("updatedAt") or system.get("updatedAt")),
         ]
 
-    # Relazione Mahon presente ma stato non riconosciuto.
-    print(
-        f"[WARN] {name}: stato Powerplay "
-        f"non gestito: {state}"
-    )
-
+    print(f"[Warning] {name}: unsupported powerplay state {state!r}")
     return None
 
 
-# ============================================================
-# BUILD SHEETS
-# ============================================================
-
-def build_excp_values(systems):
-    systems_sorted = sorted(
-        systems,
-        key=lambda x: x.get("name", "").lower(),
-    )
-
-    values = [
-        [
-            "Star system",
-            "",
-            "Controlled Systems",
-            "Last Update",
-        ]
+def build_excp_values(systems: list[dict[str, Any]]) -> list[list[Any]]:
+    timestamp = now_rome_string()
+    values: list[list[Any]] = [
+        ["Star system", "", "Controlled Systems", "Last Update"]
     ]
-
-    count = len(systems_sorted)
-    timestamp = rome_now()
-
-    for index, system in enumerate(systems_sorted):
+    for index, system in enumerate(sorted(systems, key=lambda item: item["name"].lower())):
         values.append(
             [
-                system.get("name", ""),
+                system["name"],
                 "",
-                count if index == 0 else "",
+                len(systems) if index == 0 else "",
                 timestamp if index == 0 else "",
             ]
         )
-
     return values
 
 
-def build_excp_mahon_values(systems):
-    rows = []
-
-    for system in systems:
-        row = build_mahon_row(system)
-
-        if row is not None:
-            rows.append(row)
-
-    rows.sort(
-        key=lambda row: row[0].lower()
-    )
-
-    count = len(rows)
-    timestamp = rome_now()
-
-    values = [
+def build_excp_mahon_values(
+    systems: list[dict[str, Any]],
+) -> tuple[list[list[Any]], list[list[Any]]]:
+    rows = [row for system in systems if (row := build_mahon_row(system)) is not None]
+    rows.sort(key=lambda row: row[0].lower())
+    timestamp = now_rome_string()
+    values: list[list[Any]] = [
         [
             "Star system",
             "State",
@@ -608,127 +353,93 @@ def build_excp_mahon_values(systems):
             "Last Update",
         ]
     ]
-
     for index, row in enumerate(rows):
-
         values.append(
             row
             + [""]
-            + [
-                count if index == 0 else "",
-                timestamp if index == 0 else "",
-            ]
+            + [len(rows) if index == 0 else "", timestamp if index == 0 else ""]
         )
-
     return values, rows
 
 
-# ============================================================
-# SUMMARY
-# ============================================================
+def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
+    if not APPS_SCRIPT_URL:
+        raise RuntimeError("APPS_SCRIPT_URL is required unless --dry-run is used")
+    if not APPS_SCRIPT_TOKEN:
+        raise RuntimeError("APPS_SCRIPT_TOKEN is required unless --dry-run is used")
 
-def print_summary(excp_count, mahon_rows):
-    states = {}
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            response = requests.post(
+                APPS_SCRIPT_URL,
+                json={
+                    "action": "write",
+                    "token": APPS_SCRIPT_TOKEN,
+                    "sheet": sheet,
+                    "values": values,
+                },
+                timeout=90,
+            )
+            response.raise_for_status()
+            try:
+                result = response.json()
+            except requests.exceptions.JSONDecodeError as exc:
+                raise RuntimeError("Apps Script returned a non-JSON response") from exc
+            if result.get("status") != "ok":
+                raise RuntimeError(f"Apps Script error: {json.dumps(result)}")
+            print(f"[Sheets] {sheet}: {len(values) - 1} rows written")
+            return
+        except Exception as exc:
+            last_error = exc
+            print(f"[Apps Script] Attempt {attempt}/3 failed for {sheet}: {exc}")
+            if attempt < 3:
+                time.sleep(5 * attempt)
+    raise RuntimeError(f"Apps Script is unavailable for {sheet}") from last_error
 
+
+def print_summary(excp_count: int, mahon_rows: list[list[Any]]) -> None:
+    states: dict[str, int] = {}
     for row in mahon_rows:
-        state = row[1]
-        states[state] = states.get(state, 0) + 1
+        states[row[1]] = states.get(row[1], 0) + 1
 
-    print()
-    print("========================================")
-    print(" RISULTATO")
-    print("========================================")
-    print(f"EXCP controlled : {excp_count}")
-    print(f"EXCP_Mahon      : {len(mahon_rows)}")
-    print()
-
-    for state in (
-        "Stronghold",
-        "Fortified",
-        "Exploited",
-        "Expansion",
-        "Contested",
-    ):
-        print(
-            f"{state:<12}: "
-            f"{states.get(state, 0)}"
-        )
+    print(f"\nEXCP controlled: {excp_count}")
+    print(f"EXCP_Mahon: {len(mahon_rows)}")
+    for state in ("Stronghold", "Fortified", "Exploited", "Expansion", "Contested"):
+        print(f"  {state}: {states.get(state, 0)}")
 
 
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-    start = time.time()
-
-    print()
-    print("========================================")
-    print(" ELITE VAULT - EXCP POWERPLAY")
-    print("========================================")
-
-    # --------------------------------------------------------
-    # 1. Vault
-    # --------------------------------------------------------
-
+def run(dry_run: bool = False) -> dict[str, int]:
+    started = time.time()
     systems = fetch_excp_powerplay()
-
-    if not systems:
-        raise RuntimeError(
-            "Vault ha restituito zero sistemi EXCP. "
-            "I fogli NON verranno modificati."
-        )
-
-    # --------------------------------------------------------
-    # 2. Costruzione dati in memoria
-    # --------------------------------------------------------
-
     excp_values = build_excp_values(systems)
+    match_values, mahon_rows = build_excp_mahon_values(systems)
 
-    excp_mahon_values, mahon_rows = (
-        build_excp_mahon_values(systems)
-    )
-
-    # Protezione ulteriore:
-    # se per qualche anomalia Vault restituisse EXCP
-    # ma nessun Mahon, non distruggiamo il foglio esistente.
-    if not mahon_rows:
+    if len(mahon_rows) < MIN_MATCH_SYSTEMS:
         raise RuntimeError(
-            "Nessun sistema EXCP_Mahon rilevato. "
-            "Risultato anomalo: i fogli NON verranno modificati."
+            f"Suspicious EXCP_Mahon dataset: only {len(mahon_rows)} systems"
         )
 
-    # --------------------------------------------------------
-    # 3. Scrittura
-    # --------------------------------------------------------
+    if not dry_run:
+        post_apps_script(EXCP_SHEET, excp_values)
+        post_apps_script(MATCH_SHEET, match_values)
 
-    post_apps_script(
-        "EXCP",
-        excp_values,
+    print_summary(len(systems), mahon_rows)
+    print(f"Completed in {time.time() - started:.1f}s")
+    if dry_run:
+        print("Dry run: no Google Sheet was modified")
+    return {"excp": len(systems), "matches": len(mahon_rows)}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="fetch and validate Vault data without writing to Google Sheets",
     )
-
-    time.sleep(2)
-
-    post_apps_script(
-        "EXCP_Mahon",
-        excp_mahon_values,
-    )
-
-    # --------------------------------------------------------
-    # 4. Summary
-    # --------------------------------------------------------
-
-    print_summary(
-        len(systems),
-        mahon_rows,
-    )
-
-    elapsed = time.time() - start
-
-    print()
-    print(
-        f"Completato in {elapsed:.1f} secondi."
-    )
+    args = parser.parse_args()
+    run(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

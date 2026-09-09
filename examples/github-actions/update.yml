@@ -6,10 +6,17 @@
 name: Elite Vault Powerplay Update
 
 on:
+  workflow_dispatch:
   schedule:
+    # GitHub cron uses UTC. Choose a time suitable for your own fork.
     - cron: '37 17 * * *'
 
-  workflow_dispatch:
+permissions:
+  contents: read
+
+concurrency:
+  group: elite-vault-sheets-update
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -23,6 +30,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -35,4 +43,6 @@ jobs:
       - name: Update Google Sheets
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
-        run: python main.py
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          PROJECT_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: python updater.py

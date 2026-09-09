@@ -6,39 +6,44 @@ A small Python automation that retrieves Elite Dangerous data from the
 [EliteHub Vault](https://github.com/jovanblazek/elitehub-vault) GraphQL API and
 synchronizes it with Google Sheets through a Google Apps Script web app.
 
-The updater currently tracks:
+This version is optimized for a specific question: which systems controlled by
+`Expanders Corp` are occupied or contested by Edmund Mahon? It queries only the
+EXCP-controlled systems and requests the relevant powerplay fields in the same
+paginated Vault query. It does not download Mahon's complete system list.
 
-- Edmund Mahon occupied systems: `Stronghold`, `Fortified`, and `Exploited`;
-- Edmund Mahon `Expansion` and `Contested` systems;
-- systems controlled by `Expanders Corp`;
-- the intersection between the Mahon and Expanders Corp datasets.
+The updater writes two sheets:
+
+- `EXCP`: every system controlled by Expanders Corp;
+- `EXCP_Mahon`: the EXCP systems related to Edmund Mahon, classified as
+  `Stronghold`, `Fortified`, `Exploited`, `Expansion`, or `Contested`.
 
 EliteHub Vault is the **only galaxy-data source** used by this project. There is
-no Inara scraper or fallback. If Vault is unavailable, validation fails or a
-query cannot be completed, the run stops before any Google Sheet is modified.
+no Inara scraper or fallback. If Vault is unavailable, a query cannot be
+completed, or the sanity checks fail, the run stops before either sheet is
+modified.
 
-This public repository is provided as a reference implementation and is not the
-production updater used by its maintainer. It contains no scheduled GitHub
-Actions workflow and does not run automatically.
-
-An inactive workflow example is available in
-[`examples/github-actions/update.yml`](examples/github-actions/update.yml).
-GitHub does not execute files from the `examples` directory.
+This public repository is a reference implementation and is not the production
+updater used by its maintainer. It contains no active GitHub Actions workflow
+and does not run automatically. An inactive example is available in
+[`examples/github-actions/update.yml`](examples/github-actions/update.yml);
+GitHub does not execute workflow files stored in `examples`.
 
 ## Data flow
 
-1. The script queries the read-only Vault GraphQL endpoint with pagination.
-2. It handles rate limits, retries and GraphQL query-cost reductions.
-3. Sanity checks reject unexpectedly small datasets.
-4. Only after every dataset succeeds are the three sheets updated.
+1. Query Vault for systems whose controlling faction is Expanders Corp.
+2. Retrieve each system's state, progress, Mahon relation, and conflicts in the
+   same paginated query.
+3. Handle rate limits, transient failures, and GraphQL query-cost reductions.
+4. Reject unexpectedly small `EXCP` or `EXCP_Mahon` results.
+5. Build both tables in memory, then send them to Google Apps Script.
 
 ## Requirements
 
 - Python 3.11 or newer;
 - a deployed Google Apps Script web app that accepts the JSON payload described
   below;
-- a Google Sheet containing `Mahon`, `EXCP`, and `EXCP_Mahon` tabs (names can be
-  changed with environment variables).
+- a Google Sheet containing `EXCP` and `EXCP_Mahon` tabs (the names are
+  configurable).
 
 ## Local setup
 
@@ -48,7 +53,7 @@ source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Set the required environment variable without committing it:
+Set the required environment variables without committing them:
 
 ```bash
 export APPS_SCRIPT_URL="https://script.google.com/macros/s/.../exec"
@@ -57,7 +62,8 @@ export PROJECT_REPOSITORY_URL="https://github.com/YOUR_USERNAME/elite-vault-powe
 python updater.py
 ```
 
-To test Vault queries and sanity checks without changing Sheets:
+To query and validate Vault without changing Sheets, neither Apps Script
+variable is required:
 
 ```bash
 python updater.py --dry-run
@@ -68,28 +74,26 @@ python updater.py --dry-run
 A generic receiver is included in [`apps-script/Code.gs`](apps-script/Code.gs).
 It is an example only and is not connected to the maintainer's spreadsheet.
 
-To use it in your own Google account:
-
 1. Create an Apps Script project and paste the contents of `Code.gs`.
 2. In **Project Settings → Script Properties**, add:
-   - `SPREADSHEET_ID`: the ID of your destination spreadsheet;
+   - `SPREADSHEET_ID`: the ID of the destination spreadsheet;
    - `API_TOKEN`: a long random secret of your choice.
 3. Deploy it as a web app and keep its deployment URL private.
-4. Use the same secret as `APPS_SCRIPT_TOKEN` when running the Python updater.
+4. Use the same secret as `APPS_SCRIPT_TOKEN` when running the updater.
 
-The receiver accepts writes only to `Mahon`, `EXCP`, and `EXCP_Mahon`. Change
-`ALLOWED_SHEETS` in the example if you use different sheet names.
+The receiver accepts writes only to `EXCP` and `EXCP_Mahon`. Change
+`ALLOWED_SHEETS` if you configure different names.
 
 ## Apps Script contract
 
-For each sheet, the updater sends an HTTP `POST` with JSON shaped like this:
+For each sheet, the updater sends an HTTP `POST` like this:
 
 ```json
 {
   "action": "write",
   "token": "shared-secret",
-  "sheet": "Mahon",
-  "values": [["Star system", "State"], ["14 Herculis", "Exploited"]]
+  "sheet": "EXCP",
+  "values": [["Star system", "", "Controlled Systems"], ["14 Herculis", "", 245]]
 }
 ```
 
@@ -103,32 +107,42 @@ The endpoint must return JSON containing:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `APPS_SCRIPT_URL` | required | Private Apps Script web-app endpoint |
-| `APPS_SCRIPT_TOKEN` | required | Secret shared with the Apps Script receiver |
+| `APPS_SCRIPT_URL` | required for writes | Private Apps Script web-app endpoint |
+| `APPS_SCRIPT_TOKEN` | required for writes | Secret shared with the Apps Script receiver |
 | `PROJECT_REPOSITORY_URL` | empty | Added to the Vault `User-Agent` |
 | `VAULT_URL` | Vault public endpoint | GraphQL endpoint |
-| `VAULT_BATCH_SIZE` | `100` | Initial pagination size |
-| `VAULT_MIN_BATCH_SIZE` | `10` | Smallest batch after cost errors |
-| `VAULT_MAX_RETRIES` | `3` | Attempts per Vault request |
+| `VAULT_BATCH_SIZE` | `50` | Initial pagination size |
+| `VAULT_MIN_BATCH_SIZE` | `10` | Smallest batch after query-cost errors |
+| `VAULT_MAX_RETRIES` | `5` | Attempts per Vault request |
 | `VAULT_REQUEST_DELAY` | `1.5` | Delay between pages in seconds |
-| `MIN_MAHON_SYSTEMS` | `1000` | Mahon sanity threshold |
+| `VAULT_TIMEOUT` | `60` | HTTP timeout in seconds |
 | `MIN_EXCP_SYSTEMS` | `150` | EXCP sanity threshold |
-| `EXCP_FACTION_ID` | Expanders Corp UUID | Controlling faction filter |
-| `MAHON_SHEET` | `Mahon` | Destination sheet |
-| `EXCP_SHEET` | `EXCP` | Destination sheet |
-| `MATCH_SHEET` | `EXCP_Mahon` | Destination intersection sheet |
+| `MIN_MATCH_SYSTEMS` | `1` | EXCP_Mahon sanity threshold |
+| `EXCP_FACTION_ID` | Expanders Corp UUID | Controlling-faction filter |
+| `MAHON_POWER_ID` | Edmund Mahon UUID | Power relation filter |
+| `MAHON_POWER_NAME` | `Edmund Mahon` | Conflict-owner match |
+| `EXCP_SHEET` | `EXCP` | EXCP destination sheet |
+| `MATCH_SHEET` | `EXCP_Mahon` | Intersection destination sheet |
 
 ## Optional GitHub Actions example
 
 The file [`examples/github-actions/update.yml`](examples/github-actions/update.yml)
 shows how a fork can run the updater manually or on a daily schedule. It is
-deliberately stored outside `.github/workflows`, so it is inert in this
-repository. Enabling it requires copying the file and configuring both
-`APPS_SCRIPT_URL` and `APPS_SCRIPT_TOKEN` as repository secrets.
+deliberately stored outside `.github/workflows`, so it is inert here. To enable
+it, copy it to `.github/workflows/update.yml` and configure `APPS_SCRIPT_URL`
+and `APPS_SCRIPT_TOKEN` as repository secrets.
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+ruff check updater.py tests
+```
 
 ## Attribution
 
-Powerplay, faction and system data are provided by
+Powerplay, faction, and system data are provided by
 [EliteHub Vault](https://github.com/jovanblazek/elitehub-vault), which processes
 data submitted through the Elite Dangerous Data Network (EDDN).
 
