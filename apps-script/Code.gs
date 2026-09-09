@@ -75,6 +75,12 @@ function doPost(e) {
     sheet.clearContents();
     sheet.getRange(1, 1, values.length, columnCount).setValues(values);
 
+    // Vault sends Progress as a numeric fraction (0..1). Explicit formatting
+    // avoids locale-dependent parsing of strings such as "5.4283%".
+    if (payload.sheet === "EXCP_Mahon" && values.length > 1) {
+      sheet.getRange(2, 5, values.length - 1, 1).setNumberFormat("0.####%");
+    }
+
     return jsonResponse_({
       status: "ok",
       sheet: payload.sheet,

@@ -24,7 +24,7 @@ def occupied_system(name="14 Herculis"):
 def test_formatters():
     assert format_number("12.0") == 12
     assert format_number("12.5") == 12.5
-    assert format_progress(0.587608) == "58.7608%"
+    assert format_progress(0.587608) == 0.587608
     assert format_progress(None) == ""
 
 
@@ -34,7 +34,7 @@ def test_occupied_mahon_row():
         "Exploited",
         122,
         18,
-        "18.8%",
+        0.188,
         "",
     ]
 
@@ -57,7 +57,14 @@ def test_unoccupied_classification_uses_mahon_conflict():
             ],
         },
     }
-    assert build_mahon_row(system) == ["Alpha", "Contested", "", "", "50%", ""]
+    assert build_mahon_row(system) == ["Alpha", "Contested", "", "", 0.5, ""]
+
+
+def test_progress_regressions_keep_vault_fraction():
+    assert format_progress(0.054283) == 0.054283
+    assert format_progress(0.256024) == 0.256024
+    assert format_progress(0.069708) == 0.069708
+    assert format_progress(0.265452) == 0.265452
 
 
 def test_unrelated_system_is_excluded():

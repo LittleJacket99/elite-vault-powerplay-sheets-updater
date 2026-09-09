@@ -98,12 +98,16 @@ def format_number(value: Any) -> Any:
         return value
 
 
-def format_progress(value: Any) -> str:
+def format_progress(value: Any) -> float | int | str:
+    """Return Vault's 0..1 value as a number for Google Sheets percentage cells."""
+
     if value is None or value == "":
         return ""
     try:
-        text = f"{float(value) * 100:.4f}".rstrip("0").rstrip(".")
-        return f"{text}%"
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return ""
+        return int(number) if number.is_integer() else number
     except (TypeError, ValueError):
         return ""
 

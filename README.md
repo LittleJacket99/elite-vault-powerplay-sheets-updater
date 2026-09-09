@@ -17,6 +17,9 @@ The updater writes two sheets:
 - `EXCP_Mahon`: the EXCP systems related to Edmund Mahon, classified as
   `Stronghold`, `Fortified`, `Exploited`, `Expansion`, or `Contested`.
 
+`Progress` is sent to Google Sheets as a numeric fraction (`0..1`), so it can
+be displayed with locale-safe percentage formatting.
+
 EliteHub Vault is the **only galaxy-data source** used by this project. There is
 no Inara scraper or fallback. If Vault is unavailable, a query cannot be
 completed, or the sanity checks fail, the run stops before either sheet is
