@@ -22,11 +22,10 @@ no Inara scraper or fallback. If Vault is unavailable, a query cannot be
 completed, or the sanity checks fail, the run stops before either sheet is
 modified.
 
-This public repository is a reference implementation and is not the production
-updater used by its maintainer. It contains no active GitHub Actions workflow
-and does not run automatically. An inactive example is available in
-[`examples/github-actions/update.yml`](examples/github-actions/update.yml);
-GitHub does not execute workflow files stored in `examples`.
+This repository includes an active GitHub Actions workflow in
+[`.github/workflows/update.yml`](.github/workflows/update.yml). It can be run
+manually and is scheduled once per day. A separate reusable reference remains
+available in [`examples/github-actions/update.yml`](examples/github-actions/update.yml).
 
 ## Data flow
 
@@ -124,13 +123,20 @@ The endpoint must return JSON containing:
 | `EXCP_SHEET` | `EXCP` | EXCP destination sheet |
 | `MATCH_SHEET` | `EXCP_Mahon` | Intersection destination sheet |
 
-## Optional GitHub Actions example
+## GitHub Actions
 
-The file [`examples/github-actions/update.yml`](examples/github-actions/update.yml)
-shows how a fork can run the updater manually or on a daily schedule. It is
-deliberately stored outside `.github/workflows`, so it is inert here. To enable
-it, copy it to `.github/workflows/update.yml` and configure `APPS_SCRIPT_URL`
-and `APPS_SCRIPT_TOKEN` as repository secrets.
+The active workflow runs every day at `17:37 UTC`, after which it waits for a
+random delay of up to 10 minutes before querying Vault. It can also be started
+from the GitHub Actions page with `workflow_dispatch`.
+
+The repository must contain these GitHub Actions secrets:
+
+- `APPS_SCRIPT_URL`;
+- `APPS_SCRIPT_TOKEN`.
+
+The inactive copy in
+[`examples/github-actions/update.yml`](examples/github-actions/update.yml) can
+be reused by forks or as a reference without being executed by GitHub.
 
 ## Testing
 

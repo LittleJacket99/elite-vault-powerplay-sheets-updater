@@ -1,0 +1,43 @@
+name: Elite Vault Powerplay Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs daily at 17:37 UTC, followed by a random delay of up to 10 minutes.
+    - cron: '37 17 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: elite-vault-sheets-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Random startup delay
+        run: sleep $((RANDOM % 600))
+
+      - name: Update Google Sheets
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          PROJECT_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: python updater.py
