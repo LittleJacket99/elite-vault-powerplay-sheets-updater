@@ -365,20 +365,21 @@ def build_excp_mahon_values(
 def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
     if not APPS_SCRIPT_URL:
         raise RuntimeError("APPS_SCRIPT_URL is required unless --dry-run is used")
-    if not APPS_SCRIPT_TOKEN:
-        raise RuntimeError("APPS_SCRIPT_TOKEN is required unless --dry-run is used")
+
+    payload = {
+        "action": "write",
+        "sheet": sheet,
+        "values": values,
+    }
+    if APPS_SCRIPT_TOKEN:
+        payload["token"] = APPS_SCRIPT_TOKEN
 
     last_error: Exception | None = None
     for attempt in range(1, 4):
         try:
             response = requests.post(
                 APPS_SCRIPT_URL,
-                json={
-                    "action": "write",
-                    "token": APPS_SCRIPT_TOKEN,
-                    "sheet": sheet,
-                    "values": values,
-                },
+                json=payload,
                 timeout=90,
             )
             response.raise_for_status()

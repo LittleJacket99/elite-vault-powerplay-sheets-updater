@@ -1,3 +1,4 @@
+import updater
 from updater import (
     build_excp_mahon_values,
     build_excp_values,
@@ -77,3 +78,30 @@ def test_sheet_builders_sort_and_count():
     assert [row[0] for row in rows] == ["alpha", "Zulu"]
     assert match_values[1][7] == 2
     assert len(match_values[0]) == len(match_values[1]) == 9
+
+
+def test_apps_script_token_is_optional(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ok"}
+
+    def fake_post(url, json, timeout):
+        captured.update({"url": url, "json": json, "timeout": timeout})
+        return Response()
+
+    monkeypatch.setattr(updater, "APPS_SCRIPT_URL", "https://example.test/exec")
+    monkeypatch.setattr(updater, "APPS_SCRIPT_TOKEN", "")
+    monkeypatch.setattr(updater.requests, "post", fake_post)
+
+    updater.post_apps_script("EXCP", [["Star system"], ["Alpha"]])
+
+    assert captured["json"] == {
+        "action": "write",
+        "sheet": "EXCP",
+        "values": [["Star system"], ["Alpha"]],
+    }

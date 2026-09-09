@@ -56,10 +56,12 @@ Set the required environment variables without committing them:
 
 ```bash
 export APPS_SCRIPT_URL="https://script.google.com/macros/s/.../exec"
-export APPS_SCRIPT_TOKEN="replace-with-a-long-random-secret"
 export PROJECT_REPOSITORY_URL="https://github.com/YOUR_USERNAME/elite-vault-powerplay-sheets-updater"
 python updater.py
 ```
+
+Set `APPS_SCRIPT_TOKEN` as well if the receiving Apps Script validates a shared
+token. The updater omits this field when the variable is not configured.
 
 To query and validate Vault without changing Sheets, neither Apps Script
 variable is required:
@@ -107,7 +109,7 @@ The endpoint must return JSON containing:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `APPS_SCRIPT_URL` | required for writes | Private Apps Script web-app endpoint |
-| `APPS_SCRIPT_TOKEN` | required for writes | Secret shared with the Apps Script receiver |
+| `APPS_SCRIPT_TOKEN` | empty | Optional secret shared with a protected Apps Script receiver |
 | `PROJECT_REPOSITORY_URL` | empty | Added to the Vault `User-Agent` |
 | `VAULT_URL` | Vault public endpoint | GraphQL endpoint |
 | `VAULT_BATCH_SIZE` | `50` | Initial pagination size |
@@ -129,10 +131,13 @@ The active workflow runs every day at `17:37 UTC`, after which it waits for a
 random delay of up to 10 minutes before querying Vault. It can also be started
 from the GitHub Actions page with `workflow_dispatch`.
 
-The repository must contain these GitHub Actions secrets:
+The repository must contain this GitHub Actions secret:
 
 - `APPS_SCRIPT_URL`;
-- `APPS_SCRIPT_TOKEN`.
+
+`APPS_SCRIPT_TOKEN` is optional. Configure it only when the receiving Apps
+Script checks the corresponding token. The bundled `apps-script/Code.gs`
+example does check it; a custom receiver may accept requests using only its URL.
 
 The inactive copy in
 [`examples/github-actions/update.yml`](examples/github-actions/update.yml) can
