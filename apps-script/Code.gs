@@ -10,9 +10,9 @@ const ALLOWED_SHEETS = new Set(["EXCP", "EXCP_Mahon"]);
 
 
 function jsonResponse_(body) {
-  return ContentService
-    .createTextOutput(JSON.stringify(body))
-    .setMimeType(ContentService.MimeType.JSON);
+  // HtmlService avoids ContentService's one-time
+  // script.googleusercontent.com redirect.
+  return HtmlService.createHtmlOutput(JSON.stringify(body));
 }
 
 
