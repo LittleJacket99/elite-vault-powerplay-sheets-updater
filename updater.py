@@ -388,9 +388,13 @@ def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
             )
             response.raise_for_status()
             try:
-                result = response.json()
-            except requests.exceptions.JSONDecodeError as exc:
-                raise RuntimeError("Apps Script returned a non-JSON response") from exc
+                result = json.loads(response.text.strip())
+            except json.JSONDecodeError as exc:
+                preview = response.text.strip()[:200]
+                raise RuntimeError(
+                    "Apps Script returned an invalid response "
+                    f"(status={response.status_code}, url={response.url}, body={preview!r})"
+                ) from exc
             if result.get("status") != "ok":
                 raise RuntimeError(f"Apps Script error: {json.dumps(result)}")
             print(f"[Sheets] {sheet}: {len(values) - 1} rows written")
