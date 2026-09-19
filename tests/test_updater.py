@@ -112,3 +112,28 @@ def test_apps_script_token_is_optional(monkeypatch):
         "sheet": "EXCP",
         "values": [["Star system"], ["Alpha"]],
     }
+
+
+class DummyResponse:
+    def __init__(self, text: str):
+        self.text = text
+
+
+def test_parse_apps_script_response_plain_json():
+    response = DummyResponse('{"status":"ok","sheet":"EXCP"}')
+    result = updater.parse_apps_script_response(response)
+    assert result["status"] == "ok"
+    assert result["sheet"] == "EXCP"
+
+
+def test_parse_apps_script_response_html_marker():
+    response = DummyResponse(
+        "<!doctype html><html><head></head><body>"
+        "__ELITE_VAULT_JSON__"
+        "{&quot;status&quot;:&quot;ok&quot;,&quot;sheet&quot;:&quot;EXCP_Mahon&quot;}"
+        "__END_ELITE_VAULT_JSON__"
+        "</body></html>"
+    )
+    result = updater.parse_apps_script_response(response)
+    assert result["status"] == "ok"
+    assert result["sheet"] == "EXCP_Mahon"
