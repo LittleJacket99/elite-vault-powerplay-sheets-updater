@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import math
 import os
@@ -366,6 +367,55 @@ def build_excp_mahon_values(
     return values, rows
 
 
+APPS_RESPONSE_START = "__ELITE_VAULT_JSON__"
+APPS_RESPONSE_END = "__END_ELITE_VAULT_JSON__"
+
+
+def parse_apps_script_response(response: requests.Response) -> dict[str, Any]:
+    text = response.text.strip()
+
+    # ContentService-style/plain responses.
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # HtmlService wraps our content in a Google-generated HTML document.
+    # The Apps Script receiver embeds the real JSON between unique markers.
+    candidates = [
+        text,
+        html.unescape(text),
+    ]
+
+    for candidate in candidates:
+        start = candidate.find(APPS_RESPONSE_START)
+        end = candidate.find(APPS_RESPONSE_END)
+
+        if start == -1 or end == -1 or end <= start:
+            continue
+
+        payload = candidate[
+            start + len(APPS_RESPONSE_START):end
+        ]
+        payload = html.unescape(payload).strip()
+
+        # In some HtmlService wrappers the content is stored inside a
+        # JavaScript string, so quotes can be backslash-escaped.
+        if payload.startswith(r'{\"') or r'\"status\"' in payload:
+            payload = payload.replace(r'\"', '"')
+
+        result = json.loads(payload)
+        if not isinstance(result, dict):
+            raise RuntimeError("Apps Script response JSON is not an object")
+        return result
+
+    raise RuntimeError(
+        "Apps Script response marker was not found"
+    )
+
+
 def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
     if not APPS_SCRIPT_URL:
         raise RuntimeError("APPS_SCRIPT_URL is required unless --dry-run is used")
@@ -388,11 +438,11 @@ def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
             )
             response.raise_for_status()
             try:
-                result = json.loads(response.text.strip())
-            except json.JSONDecodeError as exc:
+                result = parse_apps_script_response(response)
+            except Exception as exc:
                 preview = response.text.strip()[:200]
                 raise RuntimeError(
-                    "Apps Script returned an invalid response "
+                    "Apps Script returned an unreadable response "
                     f"(status={response.status_code}, url={response.url}, body={preview!r})"
                 ) from exc
             if result.get("status") != "ok":
