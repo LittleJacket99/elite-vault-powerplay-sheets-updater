@@ -11,8 +11,23 @@ const ALLOWED_SHEETS = new Set(["EXCP", "EXCP_Mahon"]);
 
 function jsonResponse_(body) {
   // HtmlService avoids ContentService's one-time
-  // script.googleusercontent.com redirect.
-  return HtmlService.createHtmlOutput(JSON.stringify(body));
+  // script.googleusercontent.com redirect. Unique markers let
+  // the Python client extract the JSON from Google's HTML wrapper.
+  const markerStart = "__ELITE_VAULT_JSON__";
+  const markerEnd = "__END_ELITE_VAULT_JSON__";
+
+  const escapedJson = JSON.stringify(body)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  return HtmlService.createHtmlOutput(
+    "<pre>" +
+      markerStart +
+      escapedJson +
+      markerEnd +
+    "</pre>"
+  );
 }
 
 
