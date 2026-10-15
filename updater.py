@@ -8,6 +8,7 @@ import html
 import json
 import math
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -410,9 +411,19 @@ def parse_apps_script_response(response: requests.Response) -> dict[str, Any]:
         if not payload:
             continue
 
+        # Google sometimes escapes Base64 padding in the HTML wrapper as
+        # \\x3d (occasionally with multiple backslashes). Normalize those
+        # escaped equals signs before validating/decoding the Base64 payload.
+        normalized_payload = re.sub(
+            r"\\+x3d", "=", payload, flags=re.IGNORECASE
+        )
+        normalized_payload = re.sub(
+            r"\\+u003d", "=", normalized_payload, flags=re.IGNORECASE
+        )
+
         # Preferred format: URL-safe Base64 of the exact JSON string.
         try:
-            padded = payload + ("=" * (-len(payload) % 4))
+            padded = normalized_payload + ("=" * (-len(normalized_payload) % 4))
             decoded = base64.b64decode(
                 padded,
                 altchars=b"-_",
