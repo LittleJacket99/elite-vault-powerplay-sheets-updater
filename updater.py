@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import math
@@ -372,9 +373,14 @@ APPS_RESPONSE_END = "__END_ELITE_VAULT_JSON__"
 
 
 def parse_apps_script_response(response: requests.Response) -> dict[str, Any]:
+    """Parse JSON from either a plain response or the HtmlService wrapper.
+
+    New Apps Script deployments Base64-encode the JSON inside the markers so
+    Google cannot alter quotes or HTML entities. Legacy raw JSON markers remain
+    supported during deployment.
+    """
     text = response.text.strip()
 
-    # ContentService-style/plain responses.
     try:
         result = json.loads(text)
         if isinstance(result, dict):
@@ -382,38 +388,72 @@ def parse_apps_script_response(response: requests.Response) -> dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
-    # HtmlService wraps our content in a Google-generated HTML document.
-    # The Apps Script receiver embeds the real JSON between unique markers.
-    candidates = [
-        text,
-        html.unescape(text),
-    ]
+    candidates = [text]
+    unescaped = html.unescape(text)
+    if unescaped != text:
+        candidates.append(unescaped)
+        twice_unescaped = html.unescape(unescaped)
+        if twice_unescaped != unescaped:
+            candidates.append(twice_unescaped)
 
     for candidate in candidates:
-        start = candidate.find(APPS_RESPONSE_START)
-        end = candidate.find(APPS_RESPONSE_END)
-
-        if start == -1 or end == -1 or end <= start:
+        start = candidate.rfind(APPS_RESPONSE_START)
+        if start == -1:
             continue
 
-        payload = candidate[
-            start + len(APPS_RESPONSE_START):end
-        ]
-        payload = html.unescape(payload).strip()
+        payload_start = start + len(APPS_RESPONSE_START)
+        end = candidate.find(APPS_RESPONSE_END, payload_start)
+        if end == -1:
+            continue
 
-        # In some HtmlService wrappers the content is stored inside a
-        # JavaScript string, so quotes can be backslash-escaped.
-        if payload.startswith(r'{\"') or r'\"status\"' in payload:
-            payload = payload.replace(r'\"', '"')
+        payload = candidate[payload_start:end].strip()
+        if not payload:
+            continue
 
-        result = json.loads(payload)
-        if not isinstance(result, dict):
-            raise RuntimeError("Apps Script response JSON is not an object")
-        return result
+        # Preferred format: URL-safe Base64 of the exact JSON string.
+        try:
+            padded = payload + ("=" * (-len(payload) % 4))
+            decoded = base64.b64decode(
+                padded,
+                altchars=b"-_",
+                validate=True,
+            ).decode("utf-8")
+            result = json.loads(decoded)
+            if isinstance(result, dict):
+                return result
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        except Exception:
+            # Invalid Base64 may raise binascii.Error, depending on Python.
+            pass
 
-    raise RuntimeError(
-        "Apps Script response marker was not found"
-    )
+        # Backward compatibility with the earlier raw-JSON marker format.
+        legacy_payload = html.unescape(payload).strip()
+        legacy_variants = (
+            legacy_payload,
+            legacy_payload.replace(r'\\"', '"'),
+            legacy_payload.replace(r'\"', '"'),
+        )
+        for variant in legacy_variants:
+            try:
+                result = json.loads(variant)
+                if isinstance(result, str):
+                    result = json.loads(result)
+                if isinstance(result, dict):
+                    return result
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+
+        raise RuntimeError(
+            "response markers were found, but the payload was neither "
+            f"valid Base64 JSON nor legacy JSON (payload={payload[:120]!r})"
+        )
+
+    raise RuntimeError("Apps Script response markers were not found")
+
+
+class AppsScriptResponseError(RuntimeError):
+    """A response was received, but it could not safely be treated as success."""
 
 
 def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
@@ -441,14 +481,23 @@ def post_apps_script(sheet: str, values: list[list[Any]]) -> None:
                 result = parse_apps_script_response(response)
             except Exception as exc:
                 preview = response.text.strip()[:200]
-                raise RuntimeError(
+                raise AppsScriptResponseError(
                     "Apps Script returned an unreadable response "
-                    f"(status={response.status_code}, url={response.url}, body={preview!r})"
+                    f"(status={response.status_code}, url={response.url}, body={preview!r}). "
+                    "The write may already have succeeded, so automatic retries "
+                    "were stopped to avoid duplicate writes or Discord alerts."
                 ) from exc
+
             if result.get("status") != "ok":
-                raise RuntimeError(f"Apps Script error: {json.dumps(result)}")
+                raise AppsScriptResponseError(
+                    f"Apps Script returned a non-success response: {json.dumps(result)}. "
+                    "Automatic retries were stopped."
+                )
+
             print(f"[Sheets] {sheet}: {len(values) - 1} rows written")
             return
+        except AppsScriptResponseError:
+            raise
         except Exception as exc:
             last_error = exc
             print(f"[Apps Script] Attempt {attempt}/3 failed for {sheet}: {exc}")
