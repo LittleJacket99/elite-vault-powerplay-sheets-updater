@@ -159,6 +159,32 @@ def test_parse_apps_script_response_base64_marker():
     assert result["sheet"] == "EXCP_Mahon"
 
 
+def test_parse_apps_script_response_base64_marker_with_google_escaped_padding():
+    import base64
+
+    json_body = b'{"status":"ok","action":"write","sheet":"EXCP","rows":262}'
+    payload = base64.urlsafe_b64encode(json_body).decode("ascii")
+    assert payload.endswith("==")
+
+    # Reproduce Google's HTML wrapper escaping '=' as \\x3d.
+    escaped_payload = payload.replace("=", r"\\\x3d")
+    response = DummyResponse(
+        "<!doctype html><html><body>"
+        "__ELITE_VAULT_JSON__"
+        + escaped_payload
+        + "__END_ELITE_VAULT_JSON__"
+        + "</body></html>"
+    )
+
+    result = updater.parse_apps_script_response(response)
+    assert result == {
+        "status": "ok",
+        "action": "write",
+        "sheet": "EXCP",
+        "rows": 262,
+    }
+
+
 def test_post_apps_script_does_not_retry_unreadable_200_response(monkeypatch):
     import pytest
 
