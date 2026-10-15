@@ -91,11 +91,12 @@ def test_apps_script_token_is_optional(monkeypatch):
     captured = {}
 
     class Response:
+        status_code = 200
+        url = "https://example.test/exec"
+        text = '{"status":"ok"}'
+
         def raise_for_status(self):
             return None
-
-        def json(self):
-            return {"status": "ok"}
 
     def fake_post(url, json, timeout):
         captured.update({"url": url, "json": json, "timeout": timeout})
@@ -137,3 +138,49 @@ def test_parse_apps_script_response_html_marker():
     result = updater.parse_apps_script_response(response)
     assert result["status"] == "ok"
     assert result["sheet"] == "EXCP_Mahon"
+
+
+
+def test_parse_apps_script_response_base64_marker():
+    import base64
+
+    payload = base64.urlsafe_b64encode(
+        b'{"status":"ok","sheet":"EXCP_Mahon"}'
+    ).decode("ascii").rstrip("=")
+    response = DummyResponse(
+        "<!doctype html><html><body>"
+        "__ELITE_VAULT_JSON__"
+        + payload
+        + "__END_ELITE_VAULT_JSON__"
+        + "</body></html>"
+    )
+    result = updater.parse_apps_script_response(response)
+    assert result["status"] == "ok"
+    assert result["sheet"] == "EXCP_Mahon"
+
+
+def test_post_apps_script_does_not_retry_unreadable_200_response(monkeypatch):
+    import pytest
+
+    captured = {"calls": 0}
+
+    class Response:
+        status_code = 200
+        url = "https://script.googleusercontent.com/echo"
+        text = "<!doctype html><html><body>Google wrapper without response markers</body></html>"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, json, timeout):
+        captured["calls"] += 1
+        return Response()
+
+    monkeypatch.setattr(updater, "APPS_SCRIPT_URL", "https://example.test/exec")
+    monkeypatch.setattr(updater, "APPS_SCRIPT_TOKEN", "")
+    monkeypatch.setattr(updater.requests, "post", fake_post)
+
+    with pytest.raises(updater.AppsScriptResponseError):
+        updater.post_apps_script("EXCP", [["Star system"], ["Alpha"]])
+
+    assert captured["calls"] == 1
