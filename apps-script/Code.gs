@@ -11,20 +11,19 @@ const ALLOWED_SHEETS = new Set(["EXCP", "EXCP_Mahon"]);
 
 function jsonResponse_(body) {
   // HtmlService avoids ContentService's one-time
-  // script.googleusercontent.com redirect. Unique markers let
-  // the Python client extract the JSON from Google's HTML wrapper.
+  // script.googleusercontent.com redirect.
+  // Base64 prevents Google/HTML from altering JSON quotes or entities.
   const markerStart = "__ELITE_VAULT_JSON__";
   const markerEnd = "__END_ELITE_VAULT_JSON__";
-
-  const escapedJson = JSON.stringify(body)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  const encodedJson = Utilities.base64EncodeWebSafe(
+    JSON.stringify(body),
+    Utilities.Charset.UTF_8
+  );
 
   return HtmlService.createHtmlOutput(
     "<pre>" +
       markerStart +
-      escapedJson +
+      encodedJson +
       markerEnd +
     "</pre>"
   );
